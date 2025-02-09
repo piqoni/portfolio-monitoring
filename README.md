@@ -2,7 +2,7 @@
 
 ![IMG_4487](https://github.com/user-attachments/assets/298c1385-a1db-4543-b0b3-a46cd013db52)
 
-Personal project (use and/or modify as-is) to show in T-Display S3 device:
+Personal project (use and/or modify as-is) to show stock holdings in a T-Display S3 device:
 - Total Holdings
 - Total Profit/Losses
 - Daily Profit/Losses
