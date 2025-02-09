@@ -13,6 +13,6 @@ Personal project (use and/or modify as-is) to show stock holdings in a T-Display
 # Quickstart
  - Get the [hardware](https://lilygo.cc/products/t-display-s3?variant=42585826590901)
  - Setup platformio (I used [Vscode Extension](https://docs.platformio.org/en/latest/integration/ide/pioide.html#platformio-for-vscode))
- - Clone this repository and `cp dev.lots.yaml lots.yaml'. Edit your stock lots in that file
+ - Clone this repository and `cp dev.lots.yaml lots.yaml'. Edit your stock lots (symbols, quantity, unit_cost and currency) in that file
  - Open src/main.ino and on top are the **EDITME** variables that need to be edited (default currency, wifi network, etc)
  - Plug your device via usb and using Platformio Vscode Extension click Upload.
