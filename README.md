@@ -6,7 +6,8 @@ Personal project (use and/or modify as-is) to show in T-Display S3 device:
 - Total Holdings
 - Total Profit/Losses
 - Daily Profit/Losses
-- If daily losses go over 5%, it will flash in red
+- Shows last update time
+- If daily losses go over 5%, it will flash in red. Configurable. 
 - Info refreshes every minute and stock data is retrieved from Yahoo Finance API. 
 
 # Quickstart
