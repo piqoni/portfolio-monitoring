@@ -1,0 +1,9 @@
+lots:
+  - symbol: "NVDA"
+    quantity: 2
+    unit_cost: 125.39
+    currency: USD
+  - symbol: "SXR8.DE"
+    quantity: 5
+    unit_cost: 521.82
+    currency: EUR
