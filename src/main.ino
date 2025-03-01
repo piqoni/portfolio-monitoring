@@ -10,10 +10,10 @@
 
 // first, make sure you have lots.yaml in the root directory with the lots of your stocks and their prices #EDITME
 const char *defaultCurrency = "DKK"; // EDITME if you want to use a different currency
-const char *ssid = "";  // EDITME put your wifi network name
-const char *password = "";  // EDITME put your wifi password
-
-const float ALERT_PERCENTAGE_LOSS = 0.05; // EDITME OPTIONAL 
+const char *ssid = ""; // EDITME put your wifi network name
+const char *password = "";
+const float ALERT_PERCENTAGE_LOSS = 0.05; // EDITME OPTIONAL - it will flash in red if you lose more than 5% in a day
+const float CASH_BALANCE = 0; // EDITME OPTIONAL - your cash balance
 
 // NTP Server settings
 const char *ntpServer = "pool.ntp.org";
@@ -37,41 +37,50 @@ struct StockLot
 
 std::vector<StockLot> stockLots;
 std::map<String, float> exchangeRates;
-float totalPortfolioValueDKK = 0.0;
+float totalPortfolioValue = 0.0;
 float totalProfitDKK = 0.0;
 float totalDailyProfitDKK = 0.0;
 
 float getExchangeRate(String currency)
 {
-  if (currency == defaultCurrency)
-    return 1.0f;
-  if (exchangeRates.find(currency) != exchangeRates.end())
-  {
-    return exchangeRates[currency];
+    if (currency == defaultCurrency)
+        return 1.0f;
+    if (exchangeRates.find(currency) != exchangeRates.end())
+    {
+        return exchangeRates[currency];
     }
 
     HTTPClient http;
-    String url = "https://query1.finance.yahoo.com/v8/finance/chart/" + currency + defaultCurrency +"=X?interval=1d&range=1d";
+    String url = "https://query1.finance.yahoo.com/v8/finance/chart/" + currency + defaultCurrency + "=X?interval=1d&range=1d";
     http.begin(url);
     http.addHeader("User-Agent", "Mozilla/5.0");
+    http.setTimeout(10000); // 10 second timeout
 
-    float rate = 1.0f;
+    float rate = 0.0f; // Initialize to 0 to indicate failure
+
     if (http.GET() == HTTP_CODE_OK)
     {
         String payload = http.getString();
         JsonDocument doc;
-
         if (!deserializeJson(doc, payload))
         {
-            rate = doc["chart"]["result"][0]["meta"]["regularMarketPrice"].as<float>();
+            if (doc["chart"]["result"][0]["meta"].containsKey("regularMarketPrice"))
+            {
+                rate = doc["chart"]["result"][0]["meta"]["regularMarketPrice"].as<float>();
+            }
         }
     }
+
     http.end();
+
+    if (rate <= 0)
+    {                // If we failed to get a valid rate
+        return 0.0f; // Return 0 to indicate failure
+    }
 
     exchangeRates[currency] = rate;
     return rate;
 }
-
 void setup()
 {
     pinMode(PIN_POWER_ON, OUTPUT);
@@ -104,57 +113,110 @@ void setup()
 
 void loop()
 {
-    if (WiFi.status() == WL_CONNECTED)
+    static unsigned long lastWiFiCheck = 0;
+    static unsigned long lastUpdate = 0;
+    static int failedAttempts = 0;
+    const int MAX_FAILED_ATTEMPTS = 3;
+    const unsigned long WIFI_CHECK_INTERVAL = 5000; // Check WiFi every 5 seconds
+    const unsigned long UPDATE_INTERVAL = 60000;    // Update stocks every minute
+
+    unsigned long currentMillis = millis();
+
+    // Check WiFi connection periodically
+    if (currentMillis - lastWiFiCheck >= WIFI_CHECK_INTERVAL)
     {
-        totalPortfolioValueDKK = 0.0;
-        totalProfitDKK = 0.0;
-
-        // get all required exchange rates
-        for (auto &lot : stockLots)
+        lastWiFiCheck = currentMillis;
+        if (WiFi.status() != WL_CONNECTED)
         {
-            getExchangeRate(lot.currency);
-        }
+            Serial.println("WiFi disconnected. Attempting to reconnect...");
+            WiFi.disconnect();
+            WiFi.begin(ssid, password, 6);
 
-        // Then calculate values
-        for (auto &lot : stockLots)
-        {
-            fetchStockPrice(lot);
-            tft.setTextColor(TFT_WHITE, TFT_BLACK);
-            tft.drawString(String(lot.symbol), 240, 140, 2);
-
-            // print stock data via serial for debugging
-            // Serial.print("Symbol: ");
-            // Serial.print(lot.symbol);
-            totalPortfolioValueDKK += lot.total_value_dkk;
-            totalProfitDKK += lot.profit_dkk;
-            totalDailyProfitDKK += lot.daily_profit_dkk;
-        }
-
-        // pulsate red if loss is more than ALERT_PERCENTAGE_LOSS 
-        if (totalDailyProfitDKK < 0 && abs(totalDailyProfitDKK) > totalPortfolioValueDKK * ALERT_PERCENTAGE_LOSS)
-        {
-            tft.fillScreen(TFT_RED);
-            for (int i = 0; i < 10; i++)
+            // Wait up to 10 seconds for connection
+            unsigned long connectStart = millis();
+            while (WiFi.status() != WL_CONNECTED && millis() - connectStart < 10000)
             {
-                tft.fillScreen(TFT_RED);
-                delay(100);
-                tft.fillScreen(TFT_BLACK);
-                delay(100);
+                delay(500);
+                Serial.print(".");
             }
-            tft.fillScreen(TFT_BLACK);
-            tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+            if (WiFi.status() == WL_CONNECTED)
+            {
+                Serial.println("WiFi reconnected");
+                failedAttempts = 0; // Reset failed attempts counter
+            }
         }
-
-        displayStockData();
-        
-        // reset variables for next loop
-        totalPortfolioValueDKK = 0.0;
-        totalProfitDKK = 0.0;
-        totalDailyProfitDKK = 0.0;
     }
-    delay(60000);
-}
 
+    // Update stock data
+    if (currentMillis - lastUpdate >= UPDATE_INTERVAL)
+    {
+        lastUpdate = currentMillis;
+
+        if (WiFi.status() == WL_CONNECTED)
+        {
+            Serial.printf("Free heap: %d\n", ESP.getFreeHeap());
+
+            bool updateSuccess = true; // Track if all operations succeed
+
+            // Reset all totals at the start of each cycle
+            totalPortfolioValue = 0.0;
+            totalProfitDKK = 0.0;
+            totalDailyProfitDKK = 0.0;
+
+            // Fetch all stock prices first
+            for (auto &lot : stockLots)
+            {
+                fetchStockPrice(lot, updateSuccess);
+                if (!updateSuccess)
+                {
+                    Serial.printf("Failed to fetch data for %s, skipping this update cycle\n", lot.symbol.c_str());
+                    break; // Exit the loop on first failure
+                }
+            }
+
+            if (updateSuccess)
+            {
+                // If all fetches succeeded, calculate totals
+                for (auto &lot : stockLots)
+                {
+                    totalPortfolioValue += lot.total_value_dkk;
+                    totalProfitDKK += lot.profit_dkk;
+                    totalDailyProfitDKK += lot.daily_profit_dkk;
+                }
+
+                totalPortfolioValue += CASH_BALANCE;
+                failedAttempts = 0;
+
+                displayStockData();
+            }
+            else
+            {
+                // If any fetch failed, increment failure counter
+                failedAttempts++;
+                Serial.printf("Update failed. Attempt %d of %d\n", failedAttempts, MAX_FAILED_ATTEMPTS);
+
+                if (failedAttempts >= MAX_FAILED_ATTEMPTS)
+                {
+                    // Display error message on screen
+                    tft.fillScreen(TFT_BLACK);
+                    tft.setTextColor(TFT_RED);
+                    tft.setTextSize(2);
+                    tft.setCursor(10, 120);
+                    tft.println("Connection error");
+                    tft.setCursor(10, 140);
+                    tft.println("Retrying soon...");
+
+                    // Force a WiFi reconnect
+                    WiFi.disconnect();
+                    failedAttempts = 0;
+                }
+            }
+        }
+    }
+
+    yield(); // Allow the ESP32 to handle system tasks
+}
 void parseYAML()
 {
   String yaml = LOTS_YAML;
@@ -192,41 +254,89 @@ void parseYAML()
     }
 }
 
-void fetchStockPrice(StockLot &lot)
+void fetchStockPrice(StockLot &lot, bool &success)
 {
     HTTPClient http;
     String url = "https://query1.finance.yahoo.com/v8/finance/chart/" + lot.symbol + "?interval=1d&range=1d";
     http.begin(url);
     http.addHeader("User-Agent", "Mozilla/5.0");
 
-    if (http.GET() == HTTP_CODE_OK)
+    // Set timeout to prevent hanging
+    http.setTimeout(10000); // 10 second timeout
+
+    int httpResponseCode = http.GET();
+
+    if (httpResponseCode == HTTP_CODE_OK)
     {
         String payload = http.getString();
         JsonDocument doc;
         if (!deserializeJson(doc, payload))
         {
-            float price = doc["chart"]["result"][0]["meta"]["regularMarketPrice"].as<float>();
-            float previousClose = doc["chart"]["result"][0]["meta"]["chartPreviousClose"].as<float>();
+            JsonObject result = doc["chart"]["result"][0];
+            JsonObject meta = result["meta"];
 
-            float exchangeRate = getExchangeRate(lot.currency);
+            if (meta.containsKey("regularMarketPrice") && meta.containsKey("chartPreviousClose"))
+            {
+                float price = meta["regularMarketPrice"].as<float>();
+                float previousClose = meta["chartPreviousClose"].as<float>();
+                float exchangeRate = getExchangeRate(lot.currency);
 
-            lot.current_price = price;
-            lot.total_value_dkk = lot.quantity * price * exchangeRate;
-            lot.profit_dkk = (price * exchangeRate - lot.unit_cost * exchangeRate) * lot.quantity;
-            lot.daily_profit_dkk = (price - previousClose) * lot.quantity * exchangeRate;
+                if (price > 0 && exchangeRate > 0)
+                { // Validate the values
+                    lot.current_price = price;
+                    lot.total_value_dkk = lot.quantity * price * exchangeRate;
+                    lot.profit_dkk = (price * exchangeRate - lot.unit_cost * exchangeRate) * lot.quantity;
+                    lot.daily_profit_dkk = (price - previousClose) * lot.quantity * exchangeRate;
+                }
+                else
+                {
+                    success = false;
+                    Serial.printf("Invalid price or exchange rate for %s\n", lot.symbol.c_str());
+                }
+            }
+            else
+            {
+                success = false;
+                Serial.printf("Missing market data for %s\n", lot.symbol.c_str());
+            }
+        }
+        else
+        {
+            success = false;
+            Serial.printf("JSON parse error for %s\n", lot.symbol.c_str());
         }
     }
+    else
+    {
+        success = false;
+        Serial.printf("HTTP error %d for %s\n", httpResponseCode, lot.symbol.c_str());
+    }
+
     http.end();
 }
 
 void displayStockData()
 {
+    // pulsate red if loss is more than ALERT_PERCENTAGE_LOSS
+    if (totalDailyProfitDKK < 0 && abs(totalDailyProfitDKK) > totalPortfolioValue * ALERT_PERCENTAGE_LOSS)
+    {
+        tft.fillScreen(TFT_RED);
+        for (int i = 0; i < 10; i++)
+        {
+            tft.fillScreen(TFT_RED);
+            delay(100);
+            tft.fillScreen(TFT_BLACK);
+            delay(100);
+        }
+        tft.fillScreen(TFT_BLACK);
+        tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    }
     tft.fillScreen(TFT_BLACK);
     tft.setCursor(0, 10);
 
     tft.setTextColor(TFT_WHITE);
     tft.setTextSize(7);
-    tft.printf("%.0f", totalPortfolioValueDKK);
+    tft.printf("%.0f", totalPortfolioValue);
     tft.setTextSize(1);
     tft.print("total");
 
